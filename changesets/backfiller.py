@@ -124,6 +124,36 @@ def thing_to_element(thing):
     return thing_elem
 
 
+def convert_osm_to_dict(thing):
+    output = OrderedDict([
+        ('id', thing.id),
+        ('version', thing.version),
+        ('timestamp', thing.timestamp),
+        ('changeset', thing.changeset),
+        ('visible', thing.visible),
+        ('user', thing.user),
+        ('uid', thing.uid),
+        ('tags', dict([(tag.key, tag.value) for tag in thing.tags])),
+    ])
+
+    if isinstance(thing, model.Node):
+        output['lat'] = thing.lat
+        output['lon'] = thing.lon
+    elif isinstance(thing, model.Way):
+        output['nodes'] = thing.nds
+    elif isinstance(thing, model.Relation):
+        output['members'] = []
+
+        for member in thing.members:
+            output['members'].append(OrderedDict([
+                ('type', member.type),
+                ('ref', member.ref),
+                ('role', member.role),
+            ]))
+
+    return output
+
+
 def get_osm_object(typ, id, version):
     if isinstance(typ, model.Node):
         t = 'n'
@@ -135,16 +165,7 @@ def get_osm_object(typ, id, version):
         t = 'r'
         data = a.get_relation(id, version)
 
-    output = OrderedDict([
-        ('id', data.id),
-        ('version', data.version),
-        ('timestamp', data.timestamp),
-        ('changeset', data.changeset),
-        ('visible', data.visible),
-        ('user', data.user),
-        ('uid', data.uid),
-        ('tags', dict([(tag.key, tag.value) for tag in data.tags])),
-    ])
+    output = convert_osm_to_dict(data)
 
     def get_geom_at_timestamp(nodes, timestamp):
         lat_lons = []
@@ -154,27 +175,14 @@ def get_osm_object(typ, id, version):
 
         return lat_lons
 
-    if t == 'n':
-        output['lat'] = data.lat
-        output['lon'] = data.lon
-    elif t == 'w':
-        output['nodes'] = data.nds
+    if t == 'w':
         output['geometry'] = get_geom_at_timestamp(data.nds, data.timestamp)
     elif t == 'r':
-        output['members'] = []
-        for member in data['members']:
-            backfilled_member = OrderedDict([
-                ('type', member['type']),
-                ('ref', member['ref']),
-                ('role', member['role']),
-            ])
-
+        for member in output['members']:
             if member['type'] == 'way':
                 way = way_version_at_time(member['ref'], data['timestamp'])
                 linestring = get_geom_at_timestamp(way['nodes'], data['timestamp'])
-                backfilled_member['geometry'] = linestring
-
-            output['members'].append(backfilled_member)
+                member['geometry'] = linestring
 
     return output
 
@@ -213,7 +221,12 @@ def process_changeset(changeset_id):
             old_obj = get_osm_object(obj, obj.id, obj.version - 1)
             change_parts.append(('old', old_obj))
 
-        new_obj = get_osm_object(obj, obj.id, obj.version)
+        if isinstance(obj, model.Node):
+            # If the new object is a node, we don't need to get any
+            # extra information
+            new_obj = convert_osm_to_dict(obj)
+        else:
+            new_obj = get_osm_object(obj, obj.id, obj.version)
         change_parts.append(('new', new_obj))
 
         change = OrderedDict(change_parts)
